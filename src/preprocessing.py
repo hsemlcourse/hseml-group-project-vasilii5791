@@ -1,109 +1,175 @@
 import pandas as pd
 import numpy as np
+import re
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 
-def load_data(filepath: str = "data/raw/CarPrice_Assignment.csv"):
-    """Загрузка данных из CSV."""
-    df = pd.read_csv(filepath)
-    print(f"Загружено {df.shape[0]} строк, {df.shape[1]} столбцов")
-    return df
+def load_data(filepath: str = "data/raw/Cars Datasets 2025.csv") -> pd.DataFrame:
+    """Загрузка данных из CSV с автоопределением кодировки."""
+    encodings_to_try = ['utf-8', 'latin-1', 'ISO-8859-1', 'cp1252']
+    for enc in encodings_to_try:
+        try:
+            df = pd.read_csv(filepath, encoding=enc)
+            print(f"Загружено {df.shape[0]} строк, {df.shape[1]} столбцов (кодировка: {enc})")
+            print(f"Колонки: {df.columns.tolist()}")
+            return df
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Не удалось прочитать CSV ни с одной из кодировок")
 
 
-def clean_data(df):
+def clean_numeric_value(value):
+    """Очистка числового значения: убирает $, запятые, единицы измерения, берёт среднее для диапазонов."""
+    if pd.isna(value):
+        return np.nan
+
+    value_str = str(value).strip()
+
+    # Убираем $ и запятые в числах
+    value_str = value_str.replace('$', '').replace(',', '')
+
+    # Убираем единицы измерения
+    value_str = value_str.replace(' cc', '').replace(' hp', '').replace(' Nm', '')
+    value_str = value_str.replace(' km/h', '').replace(' sec', '').replace(' cc', '')
+
+    # Обработка диапазонов (например, "70-85", "100 - 140", "$12,000-$15,000")
+    if '-' in value_str:
+        parts = value_str.split('-')
+        try:
+            nums = [float(p.strip()) for p in parts if p.strip()]
+            if nums:
+                return np.mean(nums)
+        except ValueError:
+            return np.nan
+
+    # Пробуем преобразовать в число
+    try:
+        return float(value_str)
+    except ValueError:
+        return np.nan
+
+
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Очистка данных:
+    Полная очистка данных:
+    - Переименование колонок
     - Удаление дубликатов
+    - Очистка числовых значений
     - Обработка пропусков
     - Удаление неинформативных колонок
     """
     df_clean = df.copy()
 
-    # Удаляем дубликаты
+    # 1. Переименовываем колонки для удобства
+    column_mapping = {
+        'Company Names': 'Company',
+        'Cars Names': 'Car_Name',
+        'Engines': 'Engine',
+        'CC/Battery Capacity': 'CC_Battery',
+        'HorsePower': 'HP',
+        'Total Speed': 'Speed',
+        'Performance(0 - 100 )KM/H': 'Acceleration_0_100',
+        'Cars Prices': 'Price',
+        'Fuel Types': 'Fuel',
+        'Seats': 'Seats',
+        'Torque': 'Torque'
+    }
+    df_clean = df_clean.rename(columns=column_mapping)
+
+    # 2. Удаляем дубликаты
     initial_rows = len(df_clean)
     df_clean = df_clean.drop_duplicates()
     print(f"Удалено дубликатов: {initial_rows - len(df_clean)}")
 
-    # Проверяем пропуски
+    # 3. Очищаем числовые колонки
+    numeric_columns = ['CC_Battery', 'HP', 'Speed', 'Acceleration_0_100', 'Price', 'Torque', 'Seats']
+
+    for col in numeric_columns:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].apply(clean_numeric_value)
+
+    # 4. Обрабатываем пропуски
     missing = df_clean.isnull().sum()
     if missing.sum() > 0:
         print(f"Пропуски в колонках:\n{missing[missing > 0]}")
-        # Для числовых - медиана, для категориальных - мода
         for col in df_clean.columns:
             if df_clean[col].dtype in ['int64', 'float64']:
                 df_clean[col] = df_clean[col].fillna(df_clean[col].median())
             else:
-                df_clean[col] = df_clean[col].fillna(df_clean[col].mode()[0])
+                mode_val = df_clean[col].mode()
+                if not mode_val.empty:
+                    df_clean[col] = df_clean[col].fillna(mode_val[0])
+                else:
+                    df_clean[col] = df_clean[col].fillna('Unknown')
     else:
-        print("Пропусков нет")
+        print("Пропусков после очистки нет")
 
-    # Удаляем неинформативные колонки
-    cols_to_drop = ['car_ID', 'CarName']  # ID и полное название модели
+    # 5. Удаляем неинформативные колонки
+    cols_to_drop = ['Car_Name']  # Уникальные названия моделей
     df_clean = df_clean.drop(columns=[c for c in cols_to_drop if c in df_clean.columns])
 
+    # 6. Приводим Seats к целому
+    if 'Seats' in df_clean.columns:
+        df_clean['Seats'] = df_clean['Seats'].astype(int)
+
+    print(f"Итоговый размер: {df_clean.shape[0]} строк, {df_clean.shape[1]} столбцов")
     return df_clean
 
 
-def encode_categorical(df):
+def encode_categorical(df: pd.DataFrame, target_col: str = 'Price') -> pd.DataFrame:
     """
     Кодирование категориальных признаков.
-    Бинарные → LabelEncoder, остальные → One-Hot Encoding.
     """
     df_encoded = df.copy()
 
     categorical_cols = df_encoded.select_dtypes(include=['object']).columns.tolist()
+    if target_col in categorical_cols:
+        categorical_cols.remove(target_col)
 
-    # Если 'price' в categorical_cols, убираем (это таргет)
-    if 'price' in categorical_cols:
-        categorical_cols.remove('price')
+    # Бинарные колонки через LabelEncoder
+    binary_cols = []
+    for col in categorical_cols:
+        if df_encoded[col].nunique() == 2:
+            binary_cols.append(col)
 
-    # Бинарные колонки кодируем через LabelEncoder
-    binary_cols = ['fueltype', 'aspiration', 'doornumber', 'enginelocation']
     for col in binary_cols:
-        if col in categorical_cols:
-            le = LabelEncoder()
-            df_encoded[col] = le.fit_transform(df_encoded[col])
-            categorical_cols.remove(col)
+        le = LabelEncoder()
+        df_encoded[col] = le.fit_transform(df_encoded[col])
+        categorical_cols.remove(col)
 
-    # Остальные категориальные — One-Hot Encoding
+    # Остальные через One-Hot
     if categorical_cols:
         df_encoded = pd.get_dummies(df_encoded, columns=categorical_cols, drop_first=True)
 
     return df_encoded
 
 
-def split_data(df, target_col='price', test_size=0.2, val_size=0.2, random_state=42):
-    """
-    Разделение данных на train/val/test.
-    Сначала train (60%) и temp (40%), затем temp на val (50% от temp) и test (50% от temp).
-    Итог: train 60%, val 20%, test 20%.
-    """
+def split_data(df: pd.DataFrame, target_col: str = 'Price',
+               test_size: float = 0.2, val_size: float = 0.2,
+               random_state: int = 42):
+    """Разделение на train/val/test."""
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
-    # Сначала train (60%) и temp (40%)
     X_train, X_temp, y_train, y_temp = train_test_split(
         X, y, test_size=(val_size + test_size), random_state=random_state
     )
 
-    # Делим temp на val и test (каждый по 20% от исходного)
-    val_ratio = val_size / (val_size + test_size)  # = 0.5
+    val_ratio = val_size / (val_size + test_size)
     X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.5, random_state=random_state
+        X_temp, y_temp, test_size=1 - val_ratio, random_state=random_state
     )
 
     print(f"Train: {len(X_train)} samples")
-    print(f"Val: {len(X_val)} samples")
-    print(f"Test: {len(X_test)} samples")
+    print(f"Val:   {len(X_val)} samples")
+    print(f"Test:  {len(X_test)} samples")
 
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 
 def scale_features(X_train, X_val, X_test):
-    """
-    Стандартизация признаков (fit только на train).
-    """
+    """Стандартизация признаков."""
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
