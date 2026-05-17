@@ -31,14 +31,13 @@
 ├── data  
 │ ├── processed # Очищенные данные  
 │ └── raw # Исходные файлы  
-│ └── Cars Datasets 2025.csv  
+│ └── Cars_Datasets_2025.csv  
 ├── models # Сохранённые модели  
 │ ├── baseline_ridge.pkl  
 │ └── scaler.pkl  
 ├── notebooks  
 │ ├── 01_eda.ipynb # EDA  
 │ ├── 02_baseline.ipynb # Baseline-модель  
-│ └── 03_experiments.ipynb # Эксперименты (будет позже)  
 ├── presentation # Презентация для защиты  
 ├── report  
 │ ├── images # Изображения для отчёта  
@@ -73,7 +72,7 @@ jupyter notebook notebooks/
 
 **Источник:** [Kaggle — Cars Datasets 2025](https://www.kaggle.com/datasets/abdulmalik1518/cars-datasets-2025)
 
-**Файл:** `data/raw/Cars Datasets 2025.csv` (1218 строк × 11 колонок)
+**Файл:** `data/raw/Cars_Datasets_2025.csv` (1218 строк × 11 колонок)
 
 **Колонки:**
 
